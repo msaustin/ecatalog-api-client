@@ -410,6 +410,38 @@ def get(ctx, sku):
 
 
 @room.command()
+@click.argument("sku")
+@click.argument("site")
+@click.option(
+    "--division",
+    type=click.Choice(["FL", "SE", "TX"]),
+    help="Specific division to delete from",
+)
+@click.option(
+    "--delete-import-data", is_flag=True, help="Also delete import data tables"
+)
+@click.pass_context
+def delete(ctx, sku, site, division, delete_import_data):
+    """Delete room by SKU"""
+    client = ctx.obj["client"]
+
+    try:
+        delete_request = ItemDeleteRequest(
+            Site=site, Division=division, DeleteImportData=delete_import_data
+        )
+        result = client.delete_room(sku, delete_request)
+        if result:
+            console.print(f"[green]Delete request submitted:[/green] {sku}")
+            console.print(f"Message: {result.get('message', 'Success')}")
+            if "workrequest_id" in result:
+                console.print(f"Work Request ID: {result['workrequest_id']}")
+        else:
+            console.print(f"[red]Failed to delete room:[/red] {sku}")
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+
+
+@room.command()
 @click.argument("room_sku")
 @click.option("--swap-out", "swap_out_items", multiple=True, required=True, help="Items to swap out (format: SKU:QUANTITY)")
 @click.option("--swap-in", "swap_in_items", multiple=True, required=True, help="Items to swap in (format: SKU:QUANTITY)")

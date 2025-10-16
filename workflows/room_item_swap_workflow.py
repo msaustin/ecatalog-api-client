@@ -35,6 +35,7 @@ from dotenv import load_dotenv
 
 from ecatalog_client import ECatalogAPIClient, OAuthConfig
 from workflows.import_room_item_swap import RoomItemSwapImporter
+from workflows.workflow_logger import WorkflowLogger
 
 console = Console()
 
@@ -49,6 +50,11 @@ class RoomItemSwapWorkflow:
         self.client = api_client
         self.console = console
         self.importer = RoomItemSwapImporter(api_client)
+
+        # Initialize workflow logger
+        project_root = Path(__file__).parent.parent
+        logs_dir = project_root / "data" / "room_item_swap" / "logs"
+        self.logger = WorkflowLogger("room_item_swap", logs_dir)
 
     def run_end_to_end_workflow(self, file_path: Path, sheet_name: Optional[str] = None) -> bool:
         """Run the complete room item swap workflow"""
@@ -74,7 +80,7 @@ class RoomItemSwapWorkflow:
 
             # Step 4: Live import with work request collection
             console.print("\n[bold]Step 4: Live Import & Work Request Collection[/bold]")
-            work_request_ids = self._run_live_import(file_path, sheet_name)
+            work_request_ids, room_skus = self._run_live_import(file_path, sheet_name)
 
             if not work_request_ids:
                 console.print("[yellow]⚠️ No work requests were created (swaps may have completed synchronously)[/yellow]")
@@ -84,7 +90,7 @@ class RoomItemSwapWorkflow:
 
             # Step 5: Batch process work requests
             console.print(f"\n[bold]Step 5: Processing {len(work_request_ids)} Work Requests[/bold]")
-            processing_success = self._process_work_requests(work_request_ids)
+            processing_success = self._process_work_requests(file_path.name, room_skus, work_request_ids)
 
             if not processing_success:
                 console.print("[red]❌ Work request processing failed[/red]")
@@ -175,8 +181,11 @@ class RoomItemSwapWorkflow:
         console.print(f"\n[bold green]Ready to process {valid_count} valid room item swaps[/bold green]")
         return Confirm.ask("Proceed with live import?", default=False)
 
-    def _run_live_import(self, file_path: Path, sheet_name: Optional[str]) -> List[int]:
+    def _run_live_import(self, file_path: Path, sheet_name: Optional[str]) -> Tuple[List[int], List[str]]:
         """Run live import and collect work request IDs"""
+        work_request_ids = []
+        room_skus = []
+
         try:
             stats = self.importer.import_from_spreadsheet(
                 file_path, sheet_name, dry_run=False
@@ -185,18 +194,40 @@ class RoomItemSwapWorkflow:
             console.print(f"[green]✅ Import completed: {stats['created']} swaps executed[/green]")
 
             work_request_ids = stats.get('work_request_ids', [])
+            room_skus = stats.get('room_skus', [])
+
             if work_request_ids:
                 console.print(f"[blue]📋 Collected {len(work_request_ids)} work request IDs[/blue]")
 
-            return work_request_ids
+            # Log the import operation
+            status = "Success" if stats['failed'] == 0 else "Partial"
+            notes = f"Swaps: {stats['created']}, Failed: {stats['failed']}" if stats['failed'] > 0 else ""
+            self.logger.log_import(
+                source_file=file_path.name,
+                skus=room_skus,
+                workrequest_ids=work_request_ids,
+                status=status,
+                notes=notes
+            )
+
+            return work_request_ids, room_skus
 
         except Exception as e:
             console.print(f"[red]Live import error: {e}[/red]")
             import traceback
             console.print(traceback.format_exc())
-            return []
 
-    def _process_work_requests(self, work_request_ids: List[int]) -> bool:
+            # Log the failed import
+            self.logger.log_import(
+                source_file=file_path.name,
+                skus=room_skus,
+                workrequest_ids=work_request_ids,
+                status="Failed",
+                notes=str(e)
+            )
+            return [], []
+
+    def _process_work_requests(self, source_file: str, room_skus: List[str], work_request_ids: List[int]) -> bool:
         """Process each work request individually for better traceability"""
         if not work_request_ids:
             return True
@@ -234,10 +265,30 @@ class RoomItemSwapWorkflow:
             console.print(f"  Submitted: {success_count}")
             console.print(f"  Failed: {failed_count}")
 
+            # Log the processing operation
+            status = "Success" if failed_count == 0 else "Partial" if success_count > 0 else "Failed"
+            notes = f"Submitted: {success_count}, Failed: {failed_count}" if failed_count > 0 else ""
+            self.logger.log_processing(
+                source_file=source_file,
+                skus=room_skus,
+                workrequest_ids=work_request_ids,
+                status=status,
+                notes=notes
+            )
+
             return success_count > 0
 
         except Exception as e:
             console.print(f"[red]Error processing work requests: {e}[/red]")
+
+            # Log the error
+            self.logger.log_processing(
+                source_file=source_file,
+                skus=room_skus,
+                workrequest_ids=work_request_ids,
+                status="Failed",
+                notes=str(e)
+            )
             return False
 
     # NOTE: Status monitoring methods disabled to avoid database lock conflicts

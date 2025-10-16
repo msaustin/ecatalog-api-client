@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 
 from ecatalog_client import ECatalogAPIClient, OAuthConfig
 from workflows.import_rtg_delivered_items import RtgDeliveredItemImporter
+from workflows.workflow_logger import WorkflowLogger
 
 console = Console()
 
@@ -38,6 +39,11 @@ class RtgDeliveredWorkflow:
         self.client = api_client
         self.console = console
         self.importer = RtgDeliveredItemImporter(api_client)
+
+        # Initialize workflow logger
+        project_root = Path(__file__).parent.parent
+        logs_dir = project_root / "data" / "rtg_delivered" / "logs"
+        self.logger = WorkflowLogger("rtg_delivered", logs_dir)
 
     def run_end_to_end_workflow(self, file_path: Path, sheet_name: Optional[str] = None) -> bool:
         """Run the complete RTG delivered workflow"""
@@ -63,7 +69,7 @@ class RtgDeliveredWorkflow:
 
             # Step 4: Live import with work request collection
             console.print("\n[bold]Step 4: Live Import & Work Request Collection[/bold]")
-            work_request_ids = self._run_live_import(file_path, sheet_name)
+            work_request_ids, skus_created = self._run_live_import(file_path, sheet_name)
 
             if not work_request_ids:
                 console.print("[red]❌ Live import failed - no work requests created[/red]")
@@ -71,7 +77,7 @@ class RtgDeliveredWorkflow:
 
             # Step 5: Batch process work requests
             console.print(f"\n[bold]Step 5: Processing {len(work_request_ids)} Work Requests[/bold]")
-            processing_success = self._process_work_requests(work_request_ids)
+            processing_success = self._process_work_requests(file_path.name, skus_created, work_request_ids)
 
             if not processing_success:
                 console.print("[red]❌ Work request processing failed[/red]")
@@ -185,29 +191,49 @@ class RtgDeliveredWorkflow:
         console.print(f"\n[bold green]Ready to import {stats['created']} valid records[/bold green]")
         return Confirm.ask("Proceed with live import?", default=False)
 
-    def _run_live_import(self, file_path: Path, sheet_name: Optional[str]) -> List[int]:
+    def _run_live_import(self, file_path: Path, sheet_name: Optional[str]) -> tuple[List[int], List[str]]:
         """Run live import and collect work request IDs"""
         work_request_ids = []
+        skus_processed = []
 
         try:
-            stats = self._import_with_workrequest_collection(file_path, sheet_name, work_request_ids)
+            stats = self._import_with_workrequest_collection(file_path, sheet_name, work_request_ids, skus_processed)
 
             console.print(f"[green]✅ Import completed: {stats['created']} items created[/green]")
             console.print(f"[blue]📋 Collected {len(work_request_ids)} work request IDs[/blue]")
 
-            return work_request_ids
+            # Log the import operation
+            status = "Success" if stats['failed'] == 0 else "Partial"
+            notes = f"Created: {stats['created']}, Failed: {stats['failed']}" if stats['failed'] > 0 else ""
+            self.logger.log_import(
+                source_file=file_path.name,
+                skus=skus_processed,
+                workrequest_ids=work_request_ids,
+                status=status,
+                notes=notes
+            )
+
+            return work_request_ids, skus_processed
 
         except Exception as e:
             console.print(f"[red]Live import error: {e}[/red]")
-            return []
+            # Log the failed import
+            self.logger.log_import(
+                source_file=file_path.name,
+                skus=skus_processed,
+                workrequest_ids=work_request_ids,
+                status="Failed",
+                notes=str(e)
+            )
+            return [], []
 
     def _import_with_workrequest_collection(self, file_path: Path, sheet_name: Optional[str],
-                                          work_request_ids: List[int]) -> Dict[str, int]:
+                                          work_request_ids: List[int], skus_processed: List[str]) -> Dict[str, int]:
         """Import items and collect work request IDs"""
-        return self._enhanced_import_from_spreadsheet(file_path, sheet_name, work_request_ids)
+        return self._enhanced_import_from_spreadsheet(file_path, sheet_name, work_request_ids, skus_processed)
 
     def _enhanced_import_from_spreadsheet(self, file_path: Path, sheet_name: Optional[str],
-                                        work_request_ids: List[int]) -> Dict[str, int]:
+                                        work_request_ids: List[int], skus_processed: List[str]) -> Dict[str, int]:
         """Enhanced import that captures work request IDs from API responses"""
         import pandas as pd
         from rich.progress import Progress
@@ -263,6 +289,8 @@ class RtgDeliveredWorkflow:
                     try:
                         result = self.client.create_item(item)
                         if result:
+                            # Capture SKU
+                            skus_processed.append(item.Sku)
                             # Extract work request ID
                             workrequest_id = result.get("workrequest_id")
                             if workrequest_id:
@@ -286,7 +314,7 @@ class RtgDeliveredWorkflow:
             console.print(f"[red]Error reading spreadsheet: {e}[/red]")
             return {"processed": 0, "created": 0, "failed": 0}
 
-    def _process_work_requests(self, work_request_ids: List[int]) -> bool:
+    def _process_work_requests(self, source_file: str, skus: List[str], work_request_ids: List[int]) -> bool:
         """Process work requests in batch"""
         try:
             console.print(f"[blue]Submitting {len(work_request_ids)} work requests for processing...[/blue]")
@@ -295,13 +323,40 @@ class RtgDeliveredWorkflow:
 
             if result:
                 console.print("[green]✅ Work requests submitted for processing[/green]")
+
+                # Log the submission
+                self.logger.log_submission(
+                    source_file=source_file,
+                    skus=skus,
+                    workrequest_ids=work_request_ids,
+                    status="Success",
+                    notes="Work requests submitted for batch processing"
+                )
                 return True
             else:
                 console.print("[red]❌ Failed to submit work requests for processing[/red]")
+
+                # Log the failure
+                self.logger.log_submission(
+                    source_file=source_file,
+                    skus=skus,
+                    workrequest_ids=work_request_ids,
+                    status="Failed",
+                    notes="Failed to submit work requests"
+                )
                 return False
 
         except Exception as e:
             console.print(f"[red]Work request processing error: {e}[/red]")
+
+            # Log the error
+            self.logger.log_submission(
+                source_file=source_file,
+                skus=skus,
+                workrequest_ids=work_request_ids,
+                status="Failed",
+                notes=str(e)
+            )
             return False
 
     def _get_final_status_summary(self, work_request_ids: List[int]) -> Dict[str, int]:

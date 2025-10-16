@@ -70,6 +70,10 @@ tokens/
 ~$*.xlsx
 ~$*.xls
 
+# Workflow logs
+data/*/logs/*.xlsx
+data/*/logs/*.xls
+
 # macOS
 .DS_Store
 .AppleDouble
