@@ -75,7 +75,7 @@ class SkuSubstitutionFileWorkflow:
 
             # Step 4: Live submission with work request collection
             console.print("\n[bold]Step 4: Live Submission & Work Request Collection[/bold]")
-            work_request_ids, substitution_keys = self._run_live_submission(file_path, sheet_name)
+            work_request_ids, substitution_keys, substitution_details = self._run_live_submission(file_path, sheet_name)
 
             if not work_request_ids:
                 console.print("[yellow]⚠️ No work requests were created[/yellow]")
@@ -84,7 +84,7 @@ class SkuSubstitutionFileWorkflow:
 
             # Step 5: Batch process work requests
             console.print(f"\n[bold]Step 5: Processing {len(work_request_ids)} Work Requests[/bold]")
-            processing_success = self._process_work_requests(file_path.name, substitution_keys, work_request_ids)
+            processing_success = self._process_work_requests(file_path.name, substitution_details, work_request_ids)
 
             if not processing_success:
                 console.print("[red]❌ Work request processing failed[/red]")
@@ -167,7 +167,7 @@ class SkuSubstitutionFileWorkflow:
         console.print("[yellow]⚠️  This will make real changes to the system![/yellow]")
         return Confirm.ask("Proceed with live submission?", default=False)
 
-    def _run_live_submission(self, file_path: Path, sheet_name: Optional[str]) -> Tuple[List[int], List[str]]:
+    def _run_live_submission(self, file_path: Path, sheet_name: Optional[str]) -> Tuple[List[int], List[str], List[Dict]]:
         """Run live submission and collect work request IDs"""
         work_request_ids = []
         substitution_keys = []
@@ -181,37 +181,40 @@ class SkuSubstitutionFileWorkflow:
 
             work_request_ids = stats.get('work_request_ids', [])
             substitution_keys = stats.get('substitution_keys', [])
+            substitution_details = stats.get('substitution_details', [])
 
             console.print(f"[green]✅ Submission completed: {stats['created']} request(s) submitted[/green]")
             console.print(f"[blue]📋 Collected {len(work_request_ids)} work request IDs[/blue]")
 
-            # Log the submission
+            # Log the submission with detailed substitution info
             status = "Success" if stats['failed'] == 0 else "Partial"
             notes = f"Submitted: {stats['created']}, Failed: {stats['failed']}" if stats['failed'] > 0 else ""
-            self.logger.log_import(
+            self._log_substitution_operation(
+                action="Import",
                 source_file=file_path.name,
-                skus=substitution_keys,
-                workrequest_ids=work_request_ids,
+                substitution_details=substitution_details,
+                work_request_ids=work_request_ids,
                 status=status,
                 notes=notes
             )
 
-            return work_request_ids, substitution_keys
+            return work_request_ids, substitution_keys, substitution_details
 
         except Exception as e:
             console.print(f"[red]Live submission error: {e}[/red]")
 
             # Log the failed submission
-            self.logger.log_import(
+            self._log_substitution_operation(
+                action="Import",
                 source_file=file_path.name,
-                skus=substitution_keys,
-                workrequest_ids=work_request_ids,
+                substitution_details=substitution_details if substitution_details else [],
+                work_request_ids=work_request_ids,
                 status="Failed",
                 notes=str(e)
             )
-            return [], []
+            return [], [], []
 
-    def _process_work_requests(self, source_file: str, substitution_keys: List[str], work_request_ids: List[int]) -> bool:
+    def _process_work_requests(self, source_file: str, substitution_details: List[Dict], work_request_ids: List[int]) -> bool:
         """Process work requests in batch"""
         try:
             console.print(f"[blue]Submitting {len(work_request_ids)} work requests for processing...[/blue]")
@@ -222,11 +225,12 @@ class SkuSubstitutionFileWorkflow:
             if result:
                 console.print("[green]✅ Work requests submitted for processing[/green]")
 
-                # Log the processing
-                self.logger.log_submission(
+                # Log the processing with detailed substitution info
+                self._log_substitution_operation(
+                    action="Submit",
                     source_file=source_file,
-                    skus=substitution_keys,
-                    workrequest_ids=work_request_ids,
+                    substitution_details=substitution_details,
+                    work_request_ids=work_request_ids,
                     status="Success",
                     notes="Work requests submitted for batch processing"
                 )
@@ -235,10 +239,11 @@ class SkuSubstitutionFileWorkflow:
                 console.print("[red]❌ Failed to submit work requests for processing[/red]")
 
                 # Log the failure
-                self.logger.log_submission(
+                self._log_substitution_operation(
+                    action="Submit",
                     source_file=source_file,
-                    skus=substitution_keys,
-                    workrequest_ids=work_request_ids,
+                    substitution_details=substitution_details,
+                    work_request_ids=work_request_ids,
                     status="Failed",
                     notes="Failed to submit work requests"
                 )
@@ -248,14 +253,92 @@ class SkuSubstitutionFileWorkflow:
             console.print(f"[red]Work request processing error: {e}[/red]")
 
             # Log the error
-            self.logger.log_submission(
+            self._log_substitution_operation(
+                action="Submit",
                 source_file=source_file,
-                skus=substitution_keys,
-                workrequest_ids=work_request_ids,
+                substitution_details=substitution_details,
+                work_request_ids=work_request_ids,
                 status="Failed",
                 notes=str(e)
             )
             return False
+
+    def _log_substitution_operation(
+        self,
+        action: str,
+        source_file: str,
+        substitution_details: List[Dict],
+        work_request_ids: List[int],
+        status: str,
+        notes: str
+    ) -> None:
+        """
+        Log SKU substitution operation with detailed substitution data.
+        Creates a log entry with Division, Old SKU, New SKU, and Package SKUs columns.
+        """
+        import pandas as pd
+        from datetime import datetime
+
+        try:
+            log_path = self.logger._get_log_file_path()
+
+            # Check if log file exists and load it
+            if log_path.exists():
+                try:
+                    df = pd.read_excel(log_path)
+                except Exception:
+                    df = pd.DataFrame()
+            else:
+                df = pd.DataFrame()
+
+            # Create new DataFrame with SKU substitution-specific columns if empty
+            if df.empty:
+                df = pd.DataFrame(columns=[
+                    'Timestamp',
+                    'Action',
+                    'Source File',
+                    'Division',
+                    'Old SKUs',
+                    'New SKUs',
+                    'Package SKUs',
+                    'Work Request IDs',
+                    'Work Request Count',
+                    'Status',
+                    'Notes'
+                ])
+
+            # Add a row for each substitution detail
+            for i, detail in enumerate(substitution_details):
+                # Get the corresponding work request ID if available
+                wr_id = work_request_ids[i] if i < len(work_request_ids) else ""
+
+                new_row = {
+                    'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'Action': action,
+                    'Source File': source_file,
+                    'Division': detail.get('division', ''),
+                    'Old SKUs': detail.get('old_skus', ''),
+                    'New SKUs': detail.get('new_skus', ''),
+                    'Package SKUs': detail.get('package_skus', ''),
+                    'Work Request IDs': str(wr_id) if wr_id else '',
+                    'Work Request Count': 1 if wr_id else 0,
+                    'Status': status,
+                    'Notes': notes
+                }
+
+                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+
+            # Save to Excel
+            df.to_excel(log_path, index=False, engine='openpyxl')
+
+            self.logger.logger.info(
+                f"Logged {action} operation: {len(substitution_details)} substitution(s), "
+                f"{len(work_request_ids)} work requests"
+            )
+
+        except Exception as e:
+            self.logger.logger.error(f"Failed to log substitution operation: {e}")
+            # Don't raise - logging failures shouldn't stop workflow
 
     def _display_work_request_summary(self, work_request_ids: List[int]) -> None:
         """Display work request IDs for reference"""

@@ -90,7 +90,8 @@ class SkuSubstitutionImporter:
                 "created": 0,
                 "failed": 0,
                 "work_request_ids": [],
-                "substitution_keys": []
+                "substitution_keys": [],
+                "substitution_details": []  # Store detailed info for logging
             }
 
             # Process each grouped substitution request
@@ -103,6 +104,15 @@ class SkuSubstitutionImporter:
                 for idx, (key, sub_request) in enumerate(grouped_requests.items()):
                     stats["processed"] += 1
                     stats["substitution_keys"].append(key)
+
+                    # Store detailed info for logging
+                    detail = {
+                        "division": ", ".join(sub_request.Divisions),
+                        "old_skus": ", ".join(sub_request.ReplacedSkus),
+                        "new_skus": ", ".join(sub_request.SubstitutedSkus),
+                        "package_skus": ", ".join(sub_request.PackageSkus) if sub_request.PackageSkus else ""
+                    }
+                    stats["substitution_details"].append(detail)
 
                     if export_json:
                         self._export_json(sub_request, key, file_path)
@@ -183,9 +193,10 @@ class SkuSubstitutionImporter:
                     except Exception as e:
                         console.print(f"[yellow]Warning: Error looking up {first_package}: {e}[/yellow]")
 
-        # Fallback to default
-        console.print("[yellow]Warning: Could not determine site, defaulting to RTG[/yellow]")
-        return "RTG"
+        # Cannot determine site - this is an error condition
+        console.print("[red]Error: Could not determine site from file or package SKUs[/red]")
+        console.print("[red]Please add a 'Site' column to your file or ensure Package SKUs are valid[/red]")
+        raise ValueError("Unable to determine site for SKU substitution request")
 
     def _group_substitutions(self, df: pd.DataFrame, site: str) -> Dict[str, SkuSubstitutionRequest]:
         """
