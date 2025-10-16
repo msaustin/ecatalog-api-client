@@ -1,0 +1,3 @@
+- use UV package manager for all python projects
+- for udpated documentation especially on 3rd party SDKs, packages or standards the Context7 MCP Server
+- create a /docs directory for every python project and also create and maintain a README.md file in the root of the project directory

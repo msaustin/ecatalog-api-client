@@ -1,0 +1,4 @@
+SKU,Site,Category,Collection,PDM_Description,Title,Advertising_Copy,Image,Dimensions,Generic_Name,Delivery_Type,Brand,FL_Active,SE_Active,TX_Active,Color,Style,Material
+TEST001,RTG,"Livingroom : Sofas","Test Collection","TEST SOFA DESCRIPTION","Test Sofa Blue","This is a comfortable blue sofa perfect for any living room setting.","test_sofa_blue","84w x 36d x 32h","Sofa","D","Test Brand",TRUE,TRUE,FALSE,"Blue","Modern","Fabric"
+TEST002,RTG,"Bedroom : Dressers","Test Collection","TEST DRESSER DESCRIPTION","Test Dresser Oak","Beautiful oak dresser with 6 drawers for ample storage.","test_dresser_oak","60w x 18d x 34h","Dresser","O","Test Brand",TRUE,FALSE,TRUE,"Oak","Traditional","Wood"
+TEST003,OTG,"Outdoor : Chairs","Patio Collection","OUTDOOR CHAIR DESCRIPTION","Patio Chair Aluminum","Weather-resistant aluminum patio chair with cushions.","patio_chair_aluminum","24w x 24d x 36h","Chair","D","Outdoor Brand",FALSE,TRUE,TRUE,"Gray","Contemporary","Aluminum"

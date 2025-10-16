@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "mcp-installer": {
+      "command": "npx",
+      "args": [
+        "@anaisbetts/mcp-installer"
+      ]
+    },
+    "mcp-server-restart": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-restart"
+      ]
+    },
+    "Context7": {
+      "type": "stdio",
+      "command": "npx -y @context7/mcp-server",
+      "args": [],
+      "env": {}
+    }
+  }
+}
