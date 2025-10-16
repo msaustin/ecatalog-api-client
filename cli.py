@@ -862,8 +862,72 @@ def rtg_delivered(ctx, file_path, sheet_name):
         console.print("\n[red]❌ Workflow completed with issues or was cancelled.[/red]")
 
 
+@workflow.command()
+@click.argument("file_path", type=click.Path(path_type=Path), required=False)
+@click.option("--sheet-name", help="Excel sheet name (if applicable)")
+@click.pass_context
+def sku_substitution(ctx, file_path, sheet_name):
+    """End-to-end workflow for SKU substitution from file"""
+    from workflows.sku_substitution_file_workflow import SkuSubstitutionFileWorkflow
+    from pathlib import Path
+
+    client = ctx.obj["client"]
+
+    # Handle file selection
+    if file_path is None:
+        from pathlib import Path
+        project_root = Path.cwd()
+        default_dir = project_root / "data" / "sku_substitution"
+
+        # List Excel files
+        excel_files = list(default_dir.glob("*.xlsx")) + list(default_dir.glob("*.xls"))
+
+        if not excel_files:
+            console.print(f"[red]No Excel files found in {default_dir}[/red]")
+            console.print("Please specify a file path or add Excel files to the sku_substitution directory")
+            return
+
+        # If only one file, use it automatically
+        if len(excel_files) == 1:
+            file_path = excel_files[0]
+            console.print(f"[green]Using file: {file_path.name}[/green]")
+        else:
+            # Let user choose from available files
+            console.print(f"[bold]Found {len(excel_files)} Excel files in {default_dir}:[/bold]")
+            for i, f in enumerate(excel_files, 1):
+                console.print(f"  {i}. {f.name}")
+
+            while True:
+                try:
+                    choice = click.prompt("Select file number", type=int)
+                    if 1 <= choice <= len(excel_files):
+                        file_path = excel_files[choice - 1]
+                        break
+                    else:
+                        console.print(f"[red]Please enter a number between 1 and {len(excel_files)}[/red]")
+                except click.Abort:
+                    console.print("[yellow]Operation cancelled[/yellow]")
+                    return
+                except (ValueError, IndexError):
+                    console.print("[red]Invalid selection[/red]")
+
+    # Verify file exists
+    if not file_path.exists():
+        console.print(f"[red]File not found: {file_path}[/red]")
+        return
+
+    # Run the workflow
+    workflow = SkuSubstitutionFileWorkflow(client)
+    success = workflow.run_end_to_end_workflow(file_path, sheet_name)
+
+    if success:
+        console.print("\n[green]✅ Workflow completed successfully![/green]")
+    else:
+        console.print("\n[red]❌ Workflow completed with issues or was cancelled.[/red]")
+
+
 @main.command()
-@click.option("--workflow", type=click.Choice(["dropship", "rtg-delivered", "room-item-swap", "all"]), default="all", help="Specific workflow to clean (default: all)")
+@click.option("--workflow", type=click.Choice(["dropship", "rtg-delivered", "room-item-swap", "sku-substitution", "all"]), default="all", help="Specific workflow to clean (default: all)")
 @click.option("--confirm", is_flag=True, help="Skip confirmation prompt")
 @click.pass_context
 def clean(ctx, workflow, confirm):
@@ -877,7 +941,8 @@ def clean(ctx, workflow, confirm):
     workflows_to_clean = {
         "dropship": project_root / "data" / "dropship" / "json",
         "rtg-delivered": project_root / "data" / "rtg_delivered" / "json",
-        "room-item-swap": project_root / "data" / "room_item_swap" / "json"
+        "room-item-swap": project_root / "data" / "room_item_swap" / "json",
+        "sku-substitution": project_root / "data" / "sku_substitution" / "json"
     }
 
     # Filter based on selection
