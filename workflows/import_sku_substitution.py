@@ -77,8 +77,8 @@ class SkuSubstitutionImporter:
                 console.print(f"[yellow]Available columns: {', '.join(df.columns)}[/yellow]")
                 return {"processed": 0, "created": 0, "failed": 0}
 
-            # Get site from filename or use default
-            site = self._extract_site_from_filename(file_path.name)
+            # Get site - check if column exists, otherwise lookup from first package SKU
+            site = self._determine_site(df, file_path.name)
 
             # Group by division and build substitution requests
             grouped_requests = self._group_substitutions(df, site)
@@ -141,9 +141,50 @@ class SkuSubstitutionImporter:
             console.print(traceback.format_exc())
             return {"processed": 0, "created": 0, "failed": 0}
 
-    def _extract_site_from_filename(self, filename: str) -> str:
-        """Extract site from filename (e.g., MERCH_SUBSKU_HLVN -> assume RTG)"""
-        # Default to RTG - you can add logic to detect site from filename
+    def _determine_site(self, df: pd.DataFrame, filename: str) -> str:
+        """
+        Determine site for substitution request.
+        First checks if Site column exists in file.
+        If not, looks up the first package SKU to determine site.
+        """
+        # Check if Site column exists
+        if "Site" in df.columns:
+            # Get first non-null site value
+            sites = df["Site"].dropna().unique()
+            if len(sites) > 0:
+                site = str(sites[0])
+                console.print(f"[blue]Using site from file: {site}[/blue]")
+                return site
+
+        # No Site column - lookup from first package SKU
+        if "Package Skus" in df.columns:
+            for packages in df["Package Skus"].dropna():
+                if isinstance(packages, str) and packages.strip():
+                    # Get first package SKU
+                    first_package = packages.split(",")[0].strip()
+                    console.print(f"[yellow]No Site column found - looking up site from package SKU: {first_package}[/yellow]")
+
+                    try:
+                        lookup_result = self.client.lookup_sku(first_package)
+                        if lookup_result:
+                            # Handle both dict and Pydantic model responses
+                            if hasattr(lookup_result, 'site'):
+                                site = lookup_result.site
+                            elif isinstance(lookup_result, dict) and lookup_result.get("site"):
+                                site = lookup_result["site"]
+                            else:
+                                site = None
+
+                            if site:
+                                console.print(f"[green]Determined site from package SKU lookup: {site}[/green]")
+                                return site
+                            else:
+                                console.print(f"[yellow]Warning: Could not determine site from {first_package}[/yellow]")
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: Error looking up {first_package}: {e}[/yellow]")
+
+        # Fallback to default
+        console.print("[yellow]Warning: Could not determine site, defaulting to RTG[/yellow]")
         return "RTG"
 
     def _group_substitutions(self, df: pd.DataFrame, site: str) -> Dict[str, SkuSubstitutionRequest]:
