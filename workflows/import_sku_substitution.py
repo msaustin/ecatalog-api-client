@@ -223,12 +223,20 @@ class SkuSubstitutionImporter:
                 # Remove duplicates
                 package_skus = list(set(all_packages)) if all_packages else None
 
+            # Parse division - handle comma-separated divisions like "FL, SE, TX"
+            if isinstance(division, str) and "," in division:
+                # Split comma-separated divisions
+                divisions_list = [d.strip() for d in division.split(",") if d.strip()]
+            else:
+                # Single division
+                divisions_list = [str(division).strip()]
+
             # Create request using field aliases
             request_data = {
                 "Site": site,
                 "Replaced Skus": replaced_skus,
                 "Substituted Skus": substituted_skus,
-                "Divisions": [division],
+                "Divisions": divisions_list,
             }
 
             if package_skus:
@@ -236,10 +244,14 @@ class SkuSubstitutionImporter:
 
             try:
                 sub_request = SkuSubstitutionRequest.model_validate(request_data)
-                key = f"{site}_{division}_{len(replaced_skus)}skus"
+                # Use divisions_list for key to avoid issues with commas
+                divisions_key = "_".join(divisions_list)
+                key = f"{site}_{divisions_key}_{len(replaced_skus)}skus"
                 grouped_requests[key] = sub_request
 
-                console.print(f"[blue]Created request for {division}:[/blue] {len(replaced_skus)} SKU pairs")
+                # Display which divisions were parsed
+                divisions_display = ", ".join(divisions_list)
+                console.print(f"[blue]Created request for {divisions_display}:[/blue] {len(replaced_skus)} SKU pairs")
                 if package_skus:
                     console.print(f"  [dim]Targeting {len(package_skus)} package SKUs[/dim]")
 
